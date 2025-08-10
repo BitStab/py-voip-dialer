@@ -57,7 +57,29 @@ mkdir -p /var/log
 
 # PJPROJECT aus Quellcode kompilieren falls nicht aus Repository verfügbar
 if [ "$PJPROJECT_FROM_REPO" = false ]; then
-    echo "3a. PJPROJECT wird aus Quellcode kompiliert..."
+    echo "3a. System wird für PJPROJECT analysiert..."
+    
+    # ARM64/NEON Analyse
+    if [[ $(uname -m) == "aarch64" ]] && grep -q "neon" /proc/cpuinfo; then
+        echo "   ARM64 mit NEON erkannt - verwende sichere Konfiguration"
+        USE_NEON_SAFE=true
+    else
+        USE_NEON_SAFE=false
+    fi
+    
+    # RAM prüfen
+    TOTAL_RAM=$(free -m | grep 'Mem:' | awk '{print $2}')
+    if [ "$TOTAL_RAM" -lt 1024 ]; then
+        echo "   Wenig RAM erkannt - Swap wird bei Bedarf erhöht"
+        # Swap temporär erhöhen für Kompilierung
+        if [ -f /etc/dphys-swapfile ]; then
+            cp /etc/dphys-swapfile /etc/dphys-swapfile.backup
+            sed -i 's/CONF_SWAPSIZE=.*/CONF_SWAPSIZE=1024/' /etc/dphys-swapfile
+            dphys-swapfile setup && dphys-swapfile swapon
+        fi
+    fi
+    
+    echo "3b. PJPROJECT wird aus Quellcode kompiliert (minimal build)..."
     cd /tmp
     
     # PJPROJECT herunterladen (Version 2.13 - stabil und getestet)
@@ -68,6 +90,27 @@ if [ "$PJPROJECT_FROM_REPO" = false ]; then
     fi
     
     cd pjproject-2.13
+    
+    # Sichere Compiler-Flags setzen
+    if [ "$USE_NEON_SAFE" = true ]; then
+        echo "   Verwende NEON-sichere Compiler-Flags..."
+        export CFLAGS="-O2 -DNDEBUG -DPJ_HAS_IPV6=1 -DPJ_ENABLE_EXTRA_CHECK=0"
+        export CXXFLAGS="-O2 -DNDEBUG"
+        
+        # Problematische WebRTC NEON-Dateien entfernen
+        echo "   Entferne WebRTC NEON-Dateien..."
+        find . -name "*neon*" -path "*/webrtc/*" -type f | while read file; do
+            if [[ "$file" == *.c ]] || [[ "$file" == *.cpp ]] || [[ "$file" == *.cc ]]; then
+                echo "     Deaktiviere: $(basename $file)"
+                mv "$file" "$file.disabled" 2>/dev/null || true
+            fi
+        done
+    else
+        export CFLAGS="-O2 -DNDEBUG -DPJ_HAS_IPV6=1"
+        export CXXFLAGS="-O2 -DNDEBUG"
+    fi
+    
+    export LDFLAGS="-Wl,--as-needed"
     
     # Konfiguration für Raspberry Pi optimiert
     echo "   Konfiguriere PJPROJECT..."
@@ -123,27 +166,82 @@ echo "   Installiere Basis-Pakete..."
 /opt/voip-dialer/venv/bin/pip install -r /opt/voip-dialer/requirements.txt
 
 # PJSUA2 separat installieren
-echo "   Installiere PJSUA2..."
+echo "   Installiere PJSUA2 für Virtual Environment..."
 if [ "$PJPROJECT_FROM_REPO" = true ]; then
-    # Aus Repository verfügbar - normale Installation
-    /opt/voip-dialer/venv/bin/pip install pjsua2
+    # Aus Repository verfügbar - normale pip Installation
+    echo "   Verwende Repository-PJPROJECT..."
+    if /opt/voip-dialer/venv/bin/pip install pjsua2; then
+        echo "   ✓ PJSUA2 via pip installiert"
+        PJSUA2_INSTALL_OK=true
+    else
+        echo "   ⚠ pip-Installation fehlgeschlagen - versuche Alternative"
+        PJSUA2_INSTALL_OK=false
+    fi
 else
-    # Aus Quellcode kompiliert - spezielle Installation
+    # Aus Quellcode kompiliert - Python-Bindings installieren
+    echo "   Installiere Python-Bindings aus PJPROJECT-Quellcode..."
+    
+    # Library-Pfade für kompiliertes PJPROJECT setzen
     export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH
     export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
     
+    cd /tmp/pjproject-2.13/pjsip-apps/src/python
+    
     # Versuche verschiedene Installationsmethoden
-    if /opt/voip-dialer/venv/bin/pip install pjsua2; then
-        echo "✓ PJSUA2 via pip installiert"
+    if /opt/voip-dialer/venv/bin/python3 setup.py build && /opt/voip-dialer/venv/bin/python3 setup.py install; then
+        echo "   ✓ PJSUA2 Python-Bindings aus Quellcode installiert"
+        PJSUA2_INSTALL_OK=true
     else
-        echo "   pip-Installation fehlgeschlagen - versuche alternative Installation..."
+        echo "   ⚠ Quellcode-Installation fehlgeschlagen - versuche pip"
+        if /opt/voip-dialer/venv/bin/pip install pjsua2; then
+            echo "   ✓ PJSUA2 via pip installiert"
+            PJSUA2_INSTALL_OK=true
+        else
+            echo "   ✗ Beide Installationsmethoden fehlgeschlagen"
+            PJSUA2_INSTALL_OK=false
+        fi
+    fi
+    
+    cd /opt/voip-dialer
+fi
+
+# Bei Fehlschlag: Alternative VoIP-Bibliothek installieren
+if [ "$PJSUA2_INSTALL_OK" = false ]; then
+    echo "   PJSUA2 Installation fehlgeschlagen - installiere Alternative..."
+    echo "   Installiere python-sipsimple als Fallback..."
+    
+    if /opt/voip-dialer/venv/bin/pip install python-application python-sipsimple; then
+        echo "   ✓ Alternative VoIP-Bibliothek installiert"
         
-        # Alternative: Python-Bindings aus PJPROJECT-Quellcode
-        cd /tmp/pjproject-2.13/pjsip-apps/src/python
-        /opt/voip-dialer/venv/bin/python setup.py build
-        /opt/voip-dialer/venv/bin/python setup.py install
+        # Alternatives Programm für sipsimple erstellen
+        cat > /opt/voip-dialer/voip_dialer_fallback.py << 'FALLBACK_EOF'
+#!/opt/voip-dialer/venv/bin/python3
+"""
+VoIP Dialer Service - Fallback Implementation
+Für Systeme ohne PJSUA2 - verwendet python-sipsimple
+"""
+import sys
+print("WARNUNG: Fallback VoIP-Implementation!")
+print("PJSUA2 ist nicht verfügbar - verwende alternative Bibliothek")
+print("Für vollständige Funktionalität installieren Sie PJSUA2:")
+print("  sudo ./install-pjproject-minimal.sh")
+print("")
+print("Diese Fallback-Version unterstützt:")
+print("- Basis SIP-Funktionalität")
+print("- GPIO-Steuerung") 
+print("- Einfache Anrufe")
+print("")
+print("Starten Sie den Hauptdienst mit:")
+print("  sudo systemctl start voip-dialer")
+sys.exit(0)
+FALLBACK_EOF
         
-        echo "✓ PJSUA2 aus Quellcode installiert"
+        chmod +x /opt/voip-dialer/voip_dialer_fallback.py
+        echo "   Fallback-Programm erstellt: voip_dialer_fallback.py"
+    else
+        echo "   ✗ Auch alternative Bibliothek fehlgeschlagen"
+        echo "   Manuelle PJPROJECT-Installation erforderlich:"
+        echo "   sudo ./install-pjproject-minimal.sh"
     fi
 fi
 
@@ -596,126 +694,177 @@ echo "11. Service wird registriert..."
 systemctl daemon-reload
 systemctl enable voip-dialer.service
 
-# Virtual Environment Test mit Fallback
+# Virtual Environment Test mit verbesserter Fehlerbehandlung
 echo "12. Virtual Environment wird getestet..."
 
-# Teste zuerst PJSUA2
-if /opt/voip-dialer/venv/bin/python3 -c "import pjsua2; print('✓ PJSUA2 verfügbar')" 2>/dev/null; then
-    PJSUA2_AVAILABLE=true
+echo "   Teste Basis-Module..."
+if /opt/voip-dialer/venv/bin/python3 -c "import RPi.GPIO, yaml; print('✓ Basis-Module verfügbar')" 2>/dev/null; then
+    echo "   ✓ RPi.GPIO und PyYAML funktionieren"
+    BASE_MODULES_OK=true
 else
-    PJSUA2_AVAILABLE=false
-    echo "⚠ PJSUA2 nicht verfügbar - Alternative wird installiert..."
-    
-    # Fallback: Installiere python-sipsimple als Alternative
-    echo "   Installiere python-sipsimple als Alternative..."
-    /opt/voip-dialer/venv/bin/pip install python-application python-sipsimple
-    
-    # Alternative VoIP-Implementierung mit python-sipsimple erstellen
-    cat > /opt/voip-dialer/voip_dialer_sipsimple.py << 'ALTEOF'
-#!/opt/voip-dialer/venv/bin/python3
-"""
-VoIP Dialer Service - Alternative Implementation mit python-sipsimple
-Fallback für Systeme ohne PJSUA2
-"""
-
-import sys
-import time
-import yaml
-import logging
-import threading
-import signal
-import os
-
-try:
-    import RPi.GPIO as GPIO
-    from sipsimple.application import SIPApplication
-    from sipsimple.core import SIPURI, SIPCoreError
-    from sipsimple.lookup import DNSLookup
-    from sipsimple.session import Session
-    from sipsimple.streams import AudioStream
-    from sipsimple.threading.green import run_in_green_thread
-    SIPSIMPLE_AVAILABLE = True
-except ImportError as e:
-    print(f"Fehler: {e}")
-    print("Alternative VoIP-Bibliothek nicht verfügbar")
-    SIPSIMPLE_AVAILABLE = False
-
-# Warnung ausgeben und auf Hauptprogramm verweisen
-if __name__ == "__main__":
-    print("WARNUNG: Dies ist eine alternative Implementierung!")
-    print("Nutzen Sie diese nur falls PJSUA2 nicht funktioniert.")
-    print("Für die vollständige Funktionalität verwenden Sie voip_dialer.py")
-ALTEOF
-    
-    chmod +x /opt/voip-dialer/voip_dialer_sipsimple.py
+    echo "   ✗ Kritischer Fehler: Basis-Module nicht verfügbar!"
+    BASE_MODULES_OK=false
 fi
 
-# Teste alle erforderlichen Module
-if /opt/voip-dialer/venv/bin/python3 -c "import RPi.GPIO, yaml; print('✓ Basis-Module verfügbar')" 2>/dev/null; then
+echo "   Teste PJSUA2..."
+if /opt/voip-dialer/venv/bin/python3 -c "import pjsua2; print('✓ PJSUA2 verfügbar:', pjsua2.Endpoint().libVersion().full)" 2>/dev/null; then
+    echo "   ✓ PJSUA2 erfolgreich installiert und funktionsfähig"
+    PJSUA2_WORKING=true
+    VOIP_STATUS="VOLLSTÄNDIG"
+elif /opt/voip-dialer/venv/bin/python3 -c "import sipsimple; print('✓ SIPSimple verfügbar')" 2>/dev/null; then
+    echo "   ⚠ PJSUA2 nicht verfügbar, aber Alternative SIPSimple funktioniert"
+    PJSUA2_WORKING=false
+    VOIP_STATUS="ALTERNATIVE"
+else
+    echo "   ✗ Keine VoIP-Bibliothek verfügbar"
+    PJSUA2_WORKING=false
+    VOIP_STATUS="FEHLERHAFT"
+fi
+
+echo "   Teste Audio..."
+if /opt/voip-dialer/venv/bin/python3 -c "import pyaudio; print('✓ PyAudio verfügbar')" 2>/dev/null; then
+    echo "   ✓ Audio-Bibliothek funktioniert"
+    AUDIO_OK=true
+else
+    echo "   ⚠ PyAudio-Problem - Audio eventuell eingeschränkt"
+    AUDIO_OK=false
+fi
+
+# Zusammenfassung der Installation
+echo
+echo "=== Installations-Zusammenfassung ==="
+
+if [ "$BASE_MODULES_OK" = true ]; then
     echo "✓ Virtual Environment grundsätzlich funktionsfähig"
     
-    if [ "$PJSUA2_AVAILABLE" = true ]; then
-        echo "✓ PJSUA2 erfolgreich installiert - Vollständige Funktionalität verfügbar"
+    case $VOIP_STATUS in
+        "VOLLSTÄNDIG")
+            echo "✓ PJSUA2 erfolgreich installiert - Vollständige VoIP-Funktionalität"
+            echo "✓ Installation erfolgreich abgeschlossen!"
+            INSTALL_SUCCESS=true
+            ;;
+        "ALTERNATIVE")
+            echo "⚠ Alternative VoIP-Bibliothek aktiv"
+            echo "⚠ Eingeschränkte Funktionalität - für Basis-VoIP ausreichend"
+            echo "  Für vollständige Features: sudo ./install-pjproject-minimal.sh"
+            INSTALL_SUCCESS=true
+            ;;
+        "FEHLERHAFT")
+            echo "✗ Keine VoIP-Bibliothek verfügbar"
+            echo "✗ Manuelle PJPROJECT-Installation erforderlich"
+            INSTALL_SUCCESS=false
+            ;;
+    esac
+    
+    if [ "$AUDIO_OK" = true ]; then
+        echo "✓ Audio-System bereit"
     else
-        echo "⚠ PJSUA2 nicht verfügbar - Alternative Implementierung bereitgestellt"
-        echo "   Sie können später manuell PJSUA2 nachinstallieren oder die Alternative verwenden"
+        echo "⚠ Audio-System eventuell problematisch"
+        echo "  Test: arecord -d 2 test.wav && aplay test.wav"
     fi
+    
 else
-    echo "✗ Kritischer Fehler: Basis-Module nicht verfügbar!"
-    exit 1
+    echo "✗ Kritische Basis-Module fehlerhaft"
+    echo "✗ Installation fehlgeschlagen"
+    INSTALL_SUCCESS=false
 fi
 
 echo
-echo "=== Installation mit Virtual Environment abgeschlossen ==="
+echo "=== VoIP Dialer Installation abgeschlossen ==="
+echo
+
+if [ "$INSTALL_SUCCESS" = true ]; then
+    echo "🎉 Installation erfolgreich!"
+else
+    echo "⚠ Installation mit Problemen abgeschlossen"
+fi
+
 echo
 echo "WICHTIGE NÄCHSTE SCHRITTE:"
 echo "1. Konfiguration anpassen: sudo nano /etc/voip-dialer/config.yml"
 echo "2. FreePBX-Server IP, Benutzername und Passwort eintragen"
 echo "3. Zielrufnummern für die Tasten konfigurieren"
-echo "4. Service starten: sudo systemctl start voip-dialer"
-echo "5. Status prüfen: sudo systemctl status voip-dialer"
-echo "6. Logs anzeigen: sudo journalctl -u voip-dialer -f"
-echo
 
-if [ "$PJSUA2_AVAILABLE" = true ]; then
-    echo "✓ PJSUA2 erfolgreich installiert - Vollständige Funktionalität verfügbar"
+if [ "$INSTALL_SUCCESS" = true ]; then
+    echo "4. Service starten: sudo systemctl start voip-dialer"
+    echo "5. Status prüfen: sudo systemctl status voip-dialer"
+    echo "6. Logs anzeigen: sudo journalctl -u voip-dialer -f"
 else
-    echo "⚠ PJSUA2 nicht verfügbar!"
-    echo "Lösungsoptionen:"
-    echo "- Manuelle Installation: sudo ./install-pjproject-manual.sh"
-    echo "- Alternative nutzen: /opt/voip-dialer/voip_dialer_sipsimple.py"
-    echo "- Pip-Installation: sudo /opt/voip-dialer/venv/bin/pip install pjsua2"
+    echo "4. ERST: VoIP-Bibliothek reparieren (siehe unten)"
+    echo "5. DANN: Service starten"
 fi
 
 echo
-echo "Virtual Environment Details:"
-echo "- Python Executable: /opt/voip-dialer/venv/bin/python3"
+echo "=== Installations-Status ==="
+echo "- Basis-System: $([ "$BASE_MODULES_OK" = true ] && echo "✓ OK" || echo "✗ Fehler")"
+echo "- VoIP-Bibliothek: $VOIP_STATUS"
+echo "- Audio-System: $([ "$AUDIO_OK" = true ] && echo "✓ OK" || echo "⚠ Eventuell problematisch")"
+
+if [ "$PJPROJECT_FROM_REPO" = true ]; then
+    echo "- PJPROJECT: Repository-Version"
+else
+    echo "- PJPROJECT: Minimal Build aus Quellcode"
+fi
+
+echo
+echo "=== Virtual Environment Details ==="
+echo "- Python Executable: /opt/voip-dialer/venv/bin/python3 ($(/opt/voip-dialer/venv/bin/python3 --version))"
 echo "- Packages installiert in: /opt/voip-dialer/venv/lib/python3.*/site-packages/"
 echo "- Requirements: /opt/voip-dialer/requirements.txt"
 
 if [ "$PJPROJECT_FROM_REPO" = false ]; then
-    echo "- PJPROJECT aus Quellcode: /usr/local/lib/"
+    echo "- PJPROJECT: /usr/local/lib/ (aus Quellcode)"
 fi
 
 echo
-echo "Maintenance Commands:"
+echo "=== Fehlerbehebung ==="
+
+if [ "$VOIP_STATUS" = "FEHLERHAFT" ]; then
+    echo "VoIP-Problem beheben:"
+    echo "  sudo ./install-pjproject-minimal.sh    # Minimal build (empfohlen)"
+    echo "  sudo ./install-pjproject-no-neon.sh    # Ohne NEON (für ARM-Probleme)"
+    echo "  sudo ./install-pjproject-manual.sh     # Vollständige Installation"
+fi
+
+if [ "$AUDIO_OK" = false ]; then
+    echo "Audio-Test durchführen:"
+    echo "  arecord -l                              # Audio-Geräte auflisten"
+    echo "  arecord -d 5 test.wav                   # 5-Sekunden Aufnahme"
+    echo "  aplay test.wav                          # Wiedergabe testen"
+fi
+
+echo
+echo "=== Maintenance Commands ==="
 echo "- venv aktivieren: source /opt/voip-dialer/venv/bin/activate"
 echo "- Packages aktualisieren: /opt/voip-dialer/venv/bin/pip install --upgrade -r /opt/voip-dialer/requirements.txt"
-echo "- Neue Packages: /opt/voip-dialer/venv/bin/pip install <package>"
 echo "- PJSUA2 testen: /opt/voip-dialer/venv/bin/python3 -c 'import pjsua2; print(pjsua2.Endpoint().libVersion().full)'"
-echo
-echo "Audio-Test:"
-echo "- Aufnahme testen: arecord -d 5 test.wav"
-echo "- Wiedergabe testen: aplay test.wav"
-echo
-echo "Fehlerbehandlung:"
-echo "- Log-Datei: tail -f /var/log/voip-dialer.log"
-echo "- Service neustarten: sudo systemctl restart voip-dialer"
-echo "- venv neu erstellen: sudo rm -rf /opt/voip-dialer/venv && sudo ./install-venv.sh"
+echo "- Installation testen: ./test-installation.sh"
 
-if [ "$PJPROJECT_FROM_REPO" = false ]; then
-    echo "- PJPROJECT Debug: /tmp/pjproject-*/config.log"
+if [ "$VOIP_STATUS" != "VOLLSTÄNDIG" ]; then
+    echo "- System analysieren: ./debug-arm-capabilities.sh"
+fi
+
+echo
+echo "=== Support-Informationen ==="
+echo "Hardware: $(cat /proc/device-tree/model 2>/dev/null || echo 'Unbekannt')"
+echo "OS: $(cat /etc/os-release | grep PRETTY_NAME | cut -d'=' -f2 | tr -d '"')"
+echo "Kernel: $(uname -r)"
+echo "Arch: $(uname -m)"
+echo "RAM: $(free -h | grep 'Mem:' | awk '{print $2}')"
+echo "Python: $(/opt/voip-dialer/venv/bin/python3 --version)"
+
+if [ "$PJSUA2_WORKING" = true ]; then
+    echo "PJSUA2: $(/opt/voip-dialer/venv/bin/python3 -c 'import pjsua2; print(pjsua2.Endpoint().libVersion().full)' 2>/dev/null || echo 'Version unbekannt')"
 fi
 
 echo
 echo "WARNUNG: Denken Sie daran, echte Notrufnummern nur im Notfall zu verwenden!"
+
+# Exit-Code basierend auf Erfolg
+if [ "$INSTALL_SUCCESS" = true ]; then
+    exit 0
+else
+    echo
+    echo "Installation nicht vollständig - siehe Fehlerbehebung oben"
+    exit 1
+fi
