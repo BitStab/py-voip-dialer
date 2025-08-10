@@ -1,0 +1,23 @@
+# VoIP Dialer Python Dependencies
+# Installation: pip3 install -r requirements.txt
+
+# SIP/VoIP Stack
+pjsua2>=2.10
+
+# GPIO Control für Raspberry Pi
+RPi.GPIO>=0.7.1
+
+# YAML Konfiguration
+PyYAML>=6.0
+
+# Audio Handling (falls erweiterte Audio-Features benötigt werden)
+pyaudio>=0.2.11
+
+# System/Logging (meist bereits vorhanden)
+# logging - Teil der Standardbibliothek
+# threading - Teil der Standardbibliothek  
+# signal - Teil der Standardbibliothek
+
+# Optional: Erweiterte Features
+# numpy>=1.21.0          # Für Audio-DSP
+# scipy>=1.7.0           # Für erweiterte Audio-Verarbeitung
