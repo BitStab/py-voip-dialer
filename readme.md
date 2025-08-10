@@ -47,7 +47,7 @@ Ein Service für Raspberry Pi, der bei GPIO-Tastendruck automatisch VoIP-Anrufe 
 
 ```bash
 # Download und Installation
-wget https://raw.githubusercontent.com/ihr-repo/voip-dialer/main/install-linphone-venv.sh
+wget https://raw.githubusercontent.com/Bitstab/voip-dialer/refs/heads/master/install-linphone-venv.sh
 chmod +x install-linphone-venv.sh
 sudo ./install-linphone-venv.sh
 ```
