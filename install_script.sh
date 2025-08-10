@@ -32,29 +32,50 @@ apt-get install -y \
     git \
     alsa-utils
 
-# Python-Abhängigkeiten installieren
-echo "3. Python-Pakete werden installiert..."
-pip3 install --upgrade pip
-pip3 install \
+# Python Virtual Environment erstellen
+echo "3. Python Virtual Environment wird erstellt..."
+python3 -m venv /opt/voip-dialer/venv
+
+# Virtual Environment aktivieren
+source /opt/voip-dialer/venv/bin/activate
+
+# Python-Abhängigkeiten in venv installieren
+echo "4. Python-Pakete werden in Virtual Environment installiert..."
+/opt/voip-dialer/venv/bin/pip install --upgrade pip
+/opt/voip-dialer/venv/bin/pip install \
     pjsua2 \
     RPi.GPIO \
     PyYAML \
     pyaudio
 
 # Verzeichnisse erstellen
-echo "4. Verzeichnisse werden erstellt..."
+echo "5. Verzeichnisse werden erstellt..."
 mkdir -p /opt/voip-dialer
 mkdir -p /etc/voip-dialer
 mkdir -p /var/log
 
 # Dateien kopieren
-echo "5. Dateien werden installiert..."
+echo "6. Dateien werden installiert..."
 
 # Hauptprogramm
 cat > /opt/voip-dialer/voip_dialer.py << 'EOF'
+#!/opt/voip-dialer/venv/bin/python3
+# VoIP Dialer mit Virtual Environment Shebang
 # Hier würde der Inhalt von voip_dialer.py stehen
 # (aus Platzgründen nicht komplett wiederholt)
 EOF
+
+# Requirements Datei erstellen
+cat > /opt/voip-dialer/requirements.txt << 'EOF'
+pjsua2>=2.10
+RPi.GPIO>=0.7.1
+PyYAML>=6.0
+pyaudio>=0.2.11
+EOF
+
+# Requirements installieren
+echo "  -> Python-Pakete aus requirements.txt installieren..."
+/opt/voip-dialer/venv/bin/pip install -r /opt/voip-dialer/requirements.txt
 
 # Konfiguration (Template)
 cat > /etc/voip-dialer/config.yml << 'EOF'
@@ -112,14 +133,14 @@ WantedBy=multi-user.target
 EOF
 
 # Berechtigungen setzen
-echo "6. Berechtigungen werden gesetzt..."
+echo "7. Berechtigungen werden gesetzt..."
 chmod +x /opt/voip-dialer/voip_dialer.py
 chmod 600 /etc/voip-dialer/config.yml
-chown root:root /opt/voip-dialer/voip_dialer.py
+chown -R root:root /opt/voip-dialer
 chown root:root /etc/voip-dialer/config.yml
 
 # Audio-Konfiguration für RaspAudio Mic Ultra+
-echo "7. Audio wird konfiguriert..."
+echo "8. Audio wird konfiguriert..."
 
 # ALSA-Konfiguration
 cat > /home/pi/.asoundrc << 'EOF'
@@ -136,12 +157,12 @@ ctl.!default {
 EOF
 
 # Audio-Test
-echo "8. Audio-Hardware wird getestet..."
+echo "9. Audio-Hardware wird getestet..."
 arecord -l
 aplay -l
 
 # Service registrieren
-echo "9. Service wird registriert..."
+echo "10. Service wird registriert..."
 systemctl daemon-reload
 systemctl enable voip-dialer.service
 
