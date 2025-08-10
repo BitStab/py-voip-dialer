@@ -92,6 +92,22 @@ class VoipDialer:
         try:
             # PJSUA2 Endpoint erstellen
             ep_cfg = pj.EpConfig()
+            
+            # Audio-Konfiguration mit Echo-Cancellation
+            audio_config = self.config.get('audio', {})
+            if audio_config.get('echo_cancellation', True):
+                # Echo-Cancellation konfigurieren
+                ep_cfg.medConfig.ecOptions = pj.PJMEDIA_ECHO_SIMPLE
+                ep_cfg.medConfig.ecTailLen = audio_config.get('echo_tail_length', 200)
+                self.logger.info(f"Echo-Cancellation aktiviert (Tail: {ep_cfg.medConfig.ecTailLen}ms)")
+            else:
+                ep_cfg.medConfig.ecOptions = pj.PJMEDIA_ECHO_NONE
+                self.logger.info("Echo-Cancellation deaktiviert")
+            
+            # Audio-Qualität setzen
+            ep_cfg.medConfig.clockRate = audio_config.get('sample_rate', 8000)
+            ep_cfg.medConfig.sndClockRate = audio_config.get('sample_rate', 8000)
+            
             self.endpoint = pj.Endpoint()
             self.endpoint.libCreate()
             

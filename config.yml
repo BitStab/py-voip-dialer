@@ -29,7 +29,9 @@ audio:
   input_device: "default"          # Audio-Eingabegerät
   output_device: "default"         # Audio-Ausgabegerät
   sample_rate: 8000               # Samplerate für VoIP (8kHz Standard)
-  echo_cancellation: true          # Echo-Unterdrückung aktivieren
+  echo_cancellation: true          # Echo-Unterdrückung aktivieren (wichtig!)
+  echo_tail_length: 200           # Echo-Tail in ms (100-800, Standard: 200)
+  aec_level: 4                     # AEC-Level (0-4, höher = aggressiver)
 
 # Logging-Konfiguration
 logging:

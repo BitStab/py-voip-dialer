@@ -37,7 +37,8 @@ apt-get install -y \
     libsrtp2-dev \
     uuid-dev \
     swig \
-    libbcg729-dev
+    libspeex-dev \
+    libspeexdsp-dev
 
 # Versuche PJPROJECT aus Repository zu installieren (falls verfügbar)
 echo "2a. Prüfe Repository-PJPROJECT..."
