@@ -185,9 +185,28 @@ else
     
     cd /tmp/pjproject-2.13/pjsip-apps/src/python
     
-    # Problem 1: TabError in setup.py beheben
-    echo "     Behebe TabError in setup.py..."
-    sed -i 's/\t/    /g' setup.py  # Tabs durch Spaces ersetzen
+    # Problem 1: Python 2/3 Kompatibilität in setup.py beheben
+    echo "     Konvertiere setup.py von Python 2 zu Python 3..."
+    
+    # TabError beheben (Tabs → Spaces)
+    sed -i 's/\t/    /g' setup.py
+    
+    # Python 2 print statements → Python 3 print() functions
+    sed -i "s/print '/print('/g" setup.py
+    sed -i "s/print \"/print(\"/g" setup.py
+    sed -i "s/print \\([^(].*\\)/print(\\1)/g" setup.py
+    
+    # Fehlende schließende Klammern hinzufügen
+    sed -i "s/print('Unable to get PJ_VERSION_MAJOR'/print('Unable to get PJ_VERSION_MAJOR')/g" setup.py
+    sed -i "s/print('Unable to get PJ_VERSION_MINOR'/print('Unable to get PJ_VERSION_MINOR')/g" setup.py
+    sed -i "s/print('Unable to get PJ_VERSION_REV'/print('Unable to get PJ_VERSION_REV')/g" setup.py
+    sed -i "s/print('Unable to get PJ_VERSION_SUFFIX'/print('Unable to get PJ_VERSION_SUFFIX')/g" setup.py
+    
+    # Weitere Python 2/3 Fixes
+    sed -i 's/has_key(/in /g' setup.py  # dict.has_key() → 'key' in dict
+    sed -i 's/\.has_key(/ in /g' setup.py
+    
+    echo "     setup.py für Python 3 konvertiert"
     
     # Problem 2: version.mak erstellen falls fehlend
     if [ ! -f "../../../../version.mak" ]; then
@@ -205,27 +224,47 @@ VMAKEOF
     echo "     Korrigiere Pfade in setup.py..."
     sed -i "s|../../../../version.mak|$(pwd)/../../../../version.mak|g" setup.py
     
-    # Versuche Installation mit korrigierter setup.py
-    echo "     Installiere korrigierte Python-Bindings..."
+    # Versuche Installation mit konvertierter setup.py
+    echo "     Installiere mit Python 3-konvertierter setup.py..."
     if /opt/voip-dialer/venv/bin/python3 setup.py build && /opt/voip-dialer/venv/bin/python3 setup.py install; then
-        echo "   ✓ PJSUA2 Python-Bindings aus Quellcode installiert"
+        echo "   ✓ PJSUA2 Python-Bindings aus konvertiertem Quellcode installiert"
         PJSUA2_INSTALL_OK=true
     else
-        echo "   ⚠ Quellcode-Installation fehlgeschlagen - versuche direkten Build"
+        echo "   ⚠ Konvertierte setup.py fehlgeschlagen - versuche manuelle Kompilierung..."
         
-        # Alternative: Direkte Installation ohne setup.py
-        echo "     Versuche direkte Bindings-Installation..."
+        # Alternative: Manuelle C-Extension Kompilierung
+        echo "     Kompiliere C-Extension manuell..."
         
-        # Kopiere pjsua2.py direkt
-        if [ -f "build/lib.linux-*/pjsua2.py" ] && [ -f "build/lib.linux-*/_pjsua2.*.so" ]; then
-            echo "     Kopiere kompilierte Bindings direkt..."
-            SITE_PACKAGES=$(/opt/voip-dialer/venv/bin/python3 -c "import site; print(site.getsitepackages()[0])")
-            cp build/lib.linux-*/pjsua2.py "$SITE_PACKAGES/"
-            cp build/lib.linux-*/_pjsua2.*.so "$SITE_PACKAGES/"
-            echo "   ✓ PJSUA2 direkt installiert"
-            PJSUA2_INSTALL_OK=true
+        # Prüfe ob build-Verzeichnis existiert und verwertbare Dateien enthält
+        if [ -d "build" ]; then
+            echo "     Suche nach kompilierten Modulen..."
+            BUILT_MODULE=$(find build -name "_pjsua2*.so" | head -1)
+            PYTHON_MODULE=$(find build -name "pjsua2.py" | head -1)
+            
+            if [ -n "$BUILT_MODULE" ] && [ -n "$PYTHON_MODULE" ]; then
+                echo "     Gefundene Module: $(basename $BUILT_MODULE), $(basename $PYTHON_MODULE)"
+                
+                # Installiere direkt ins Virtual Environment
+                SITE_PACKAGES=$(/opt/voip-dialer/venv/bin/python3 -c "import site; print(site.getsitepackages()[0])")
+                echo "     Installiere nach: $SITE_PACKAGES"
+                
+                cp "$PYTHON_MODULE" "$SITE_PACKAGES/"
+                cp "$BUILT_MODULE" "$SITE_PACKAGES/"
+                
+                # Test der manuellen Installation
+                if /opt/voip-dialer/venv/bin/python3 -c "import pjsua2; print('Manual install OK')" 2>/dev/null; then
+                    echo "   ✓ PJSUA2 manuell installiert"
+                    PJSUA2_INSTALL_OK=true
+                else
+                    echo "   ✗ Manuelle Installation fehlgeschlagen"
+                    PJSUA2_INSTALL_OK=false
+                fi
+            else
+                echo "   ✗ Keine kompilierten Module gefunden"
+                PJSUA2_INSTALL_OK=false
+            fi
         else
-            echo "   ✗ Auch direkte Installation fehlgeschlagen"
+            echo "   ✗ Build-Verzeichnis nicht vorhanden"
             PJSUA2_INSTALL_OK=false
         fi
     fi
