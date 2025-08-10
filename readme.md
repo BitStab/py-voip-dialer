@@ -31,7 +31,7 @@ Ein Service für Raspberry Pi, der bei GPIO-Tastendruck automatisch VoIP-Anrufe 
 
 ```bash
 # Repository klonen oder Dateien herunterladen
-wget https://raw.githubusercontent.com/ihr-repo/voip-dialer/main/install.sh
+wget https://raw.githubusercontent.com/BitStab/voip-dialer/main/install.sh
 
 # Installation ausführen
 chmod +x install.sh
