@@ -1,6 +1,6 @@
 # VoIP Dialer für Raspberry Pi
 
-Ein Service für Raspberry Pi, der bei GPIO-Tastendruck automatisch VoIP-Anrufe über einen FreePBX Server startet.
+Ein Service für Raspberry Pi, der bei GPIO-Tastendruck automatisch VoIP-Anrufe über einen PBX Server startet.
 
 ## Features
 
